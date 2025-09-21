@@ -5,7 +5,7 @@
 ![Python](https://img.shields.io/badge/python-3.10+-blue.svg)
 ![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)
 ![Data License: OGL v3.0](https://img.shields.io/badge/Data%20License-OGL%20v3.0-blue.svg)
-![GitHub Actions](https://img.shields.io/github/actions/workflow/status/SalZaki/hmt-spending/ingest-hmt-spend-data.yml?label=Data%20Update)
+![GitHub Actions](https://img.shields.io/github/actions/workflow/status/SalZaki/hmt-spending/fetch-hmt-spending.yml?label=Data%20Update)
 
 ## Problem Statement
 
