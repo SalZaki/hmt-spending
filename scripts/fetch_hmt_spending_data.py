@@ -1,14 +1,13 @@
 #!/usr/bin/env python3
 """
-Fetch HM Treasury 'spend greater than £25,000' monthly spreadsheet,
-normalize to a stable JSON schema, and write:
+Fetch HM Treasury 'spend greater than £25,000' for a given month and write:
 
   data/hmt/YYYY/YYYY-MM.json
 
-The JSON file contains:
+Shape:
 {
-  "meta": {... provenance, quality, aggregates, groupings ...},
-  "data": [{... normalized rows ...}]
+  "metadata": { ... rich provenance, coverage, quality, aggregates ... },
+  "data":     [ ... normalized rows ... ]
 }
 
 Usage:
@@ -16,10 +15,7 @@ Usage:
   python scripts/fetch_hmt_spending_data.py
 
   # specific month
-  python scripts/fetch_hmt_spending_data.py --month 2025-02
-
-  # backfill N months including target
-  python scripts/fetch_hmt_spending_data.py --month 2025-03 --backfill 2
+  python scripts/fetch_hmt_spending_data.py --month 2025-01
 """
 import argparse, json, os, re, string, hashlib
 from datetime import date, datetime
@@ -32,9 +28,12 @@ import pandas as pd
 # ----------------------- Config -----------------------
 PUB_URL_TMPL = "https://www.gov.uk/government/publications/hmt-spend-greater-than-25000-{month}-{year}"
 MONTHS = ["january","february","march","april","may","june","july","august","september","october","november","december"]
-HEADERS = {"User-Agent":"github-action-hmt-spend-json/1.2.0 (+https://github.com/)"}
+HEADERS = {"User-Agent":"hmt-spend-json/1.2.0 (+https://github.com/)"}
+DEPARTMENT_CODE = "HMT"
+SPENDING_THRESHOLD = 25000
+CURRENCY = "GBP"
+AMOUNT_PRECISION = 2
 
-# Canonical column names -> common aliases (canonicalized)
 ALIASES = {
     "department_family": ["department family","department","departmentfamily"],
     "entity":            ["entity","body","entity name"],
@@ -45,7 +44,7 @@ ALIASES = {
     "transaction_number":["voucher number","transaction number","transaction no","transaction id","reference","ref"],
     "amount_gbp":        ["amount","amount gbp","amount £","amount(£)","£","gbp","net amount","value","amount (gbp)","amount (excl vat)","amount excluding vat"],
     "description":       ["publication description","description","item text","narrative","spend description","notes"],
-    # optional
+    # optional extras
     "supplier_postcode": ["supplier postcode","postal code","post code","postcode"],
     "supplier_type":     ["supplier type","supplier category","organisation type","organization type"],
     "contract_number":   ["contract number","contract no","po number","purchase order","purchase order no","purchase order number"],
@@ -67,7 +66,7 @@ def month_to_url(dt: date) -> str:
 
 def find_asset_xlsx_or_csv(html: str) -> str | None:
     """
-    Find the first spreadsheet attachment on a GOV.UK 'Transparency data' page.
+    Find the first spreadsheet attachment on a GOV.UK page.
     Handles the 'Documents' attachment gem and direct assets links.
     """
     soup = BeautifulSoup(html, "html.parser")
@@ -75,27 +74,24 @@ def find_asset_xlsx_or_csv(html: str) -> str | None:
     def norm(href: str) -> str:
         return urljoin("https://www.gov.uk", href)
 
-    # 1) Prefer explicit Documents attachments
+    # 1) Prefer explicit 'Documents' attachments
     for a in soup.select("a.gem-c-attachment__link, a.govuk-link.gem-c-attachment__link"):
         href = a.get("href", "")
         if re.search(r"\.(xlsx|csv)(?:\?.*)?$", href, flags=re.I):
             return norm(href)
 
-    # 2) Any anchor to assets/uploads/media ending with xlsx/csv
+    # 2) Any assets/uploads/media ending with xlsx/csv
     for a in soup.find_all("a", href=True):
         href = a["href"]
         if re.search(r"(assets\.publishing\.service\.gov\.uk|/media/|/government/uploads/).+\.(xlsx|csv)(?:\?.*)?$", href, flags=re.I):
             return norm(href)
 
-    # 3) Fallback: any .xlsx/.csv on the page
+    # 3) Fallback: any .xlsx/.csv
     a = soup.find("a", href=re.compile(r"\.(xlsx|csv)(?:\?.*)?$", flags=re.I))
     return norm(a["href"]) if a and a.has_attr("href") else None
 
 def pick_best_sheet(xls: pd.ExcelFile) -> str:
-    """
-    Choose the worksheet with the most 'signal' columns (supplier/amount/date),
-    in case sheet 0 is a cover page.
-    """
+    """Choose the worksheet with the most 'signal' columns (supplier/amount/date)."""
     scores = []
     signals = {"supplier","amount","date"}
     for name in xls.sheet_names:
@@ -119,8 +115,7 @@ def map_columns(df: pd.DataFrame) -> dict:
     for key, alias_set in ALIASES_CANON.items():
         idx = next((i for i, cc in enumerate(lc) if cc in alias_set), None)
         if idx is None:
-            # lenient contains match (e.g., 'amountgbpnet' contains 'amountgbp')
-            for i, cc in enumerate(lc):
+            for i, cc in enumerate(lc):  # lenient contains match
                 if any(a in cc for a in alias_set):
                     idx = i
                     break
@@ -135,7 +130,7 @@ def parse_amount(series: pd.Series) -> pd.Series:
     s = series.astype(str).str.strip()
     s = s.str.replace(",", "", regex=False).str.replace("£", "", regex=False)
     s = s.str.replace(r"^\((.*)\)$", r"-\1", regex=True)  # (1234.56) -> -1234.56
-    s = s.str.extract(r"(-?\d+(?:\.\d+)?)", expand=False)  # keep the first number
+    s = s.str.extract(r"(-?\d+(?:\.\d+)?)", expand=False)  # first number
     return pd.to_numeric(s, errors="coerce")
 
 def parse_date(series: pd.Series) -> pd.Series:
@@ -146,18 +141,12 @@ def parse_date(series: pd.Series) -> pd.Series:
 def normalize_dataframe(df: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
     """Return normalized dataframe and the column mapping used."""
     mapping = map_columns(df)
-
-    # Build output frame with all known keys (missing -> None)
     out = pd.DataFrame({k: df[mapping[k]] if k in mapping else None for k in ALIASES_CANON.keys()})
 
-    # Parse/format columns
     if "date" in out:
         out["date"] = parse_date(out["date"])
-
     if "amount_gbp" in out:
         out["amount_gbp"] = parse_amount(out["amount_gbp"])
-
-    # Keep transaction_number as string to preserve leading zeros
     if "transaction_number" in out:
         out["transaction_number"] = out["transaction_number"].astype(str).str.strip().replace({"nan": None})
 
@@ -171,11 +160,60 @@ def normalize_dataframe(df: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
 
     return out, mapping
 
+# ----------------------- Metadata builders -----------------------
 def _safe_len(x):
     try: return int(len(x))
     except: return 0
 
-def compute_meta(
+def uk_fiscal_year_label(dtm: date) -> str:
+    """
+    UK government financial year runs 1 April -> 31 March.
+    Example: Jan 2025 belongs to 2024-25.
+    """
+    if dtm.month >= 4:  # Apr..Dec
+        start = dtm.year
+        end = dtm.year + 1
+    else:               # Jan..Mar
+        start = dtm.year - 1
+        end = dtm.year
+    return f"{start}-{str(end)[-2:]}"
+
+def estimated_next_publication(dtm: date) -> str:
+    """
+    Conservative estimate: 15th of the following month (varies in practice).
+    """
+    nxt = (dtm.replace(day=1) + relativedelta(months=1)).replace(day=15)
+    return nxt.strftime("%Y-%m-%d")
+
+def completeness_score_and_coverage(df_norm: pd.DataFrame) -> tuple[float, str, dict]:
+    """
+    Completeness over core analytic fields; return score in [0,1], coverage label, null_counts dict.
+    """
+    core_cols = ["date","supplier","entity","amount_gbp","expense_type","expense_area","description"]
+    present = [c for c in core_cols if c in df_norm.columns]
+    if not present:
+        return 0.0, "unknown", {}
+    non_null = df_norm[present].notna().sum().sum()
+    total = df_norm[present].size
+    score = float(non_null / total) if total else 0.0
+    if score >= 0.9: coverage = "complete"
+    elif score >= 0.6: coverage = "partial"
+    else: coverage = "limited"
+    null_counts = { c: int(df_norm[c].isna().sum()) for c in df_norm.columns }
+    return score, coverage, null_counts
+
+def groups_top(df_norm: pd.DataFrame, key: str, top_n: int = 10, label_key: str | None = None):
+    label_key = label_key or key
+    g = df_norm.groupby(key, dropna=True)["amount_gbp"].agg(["sum","count"]).reset_index()
+    g = g.sort_values("sum", ascending=False).head(top_n)
+    return [
+        { label_key: (row[key] if pd.notna(row[key]) else None),
+          "total": float(row["sum"]),
+          "transaction_count": int(row["count"]) }
+        for _, row in g.iterrows()
+    ]
+
+def compute_metadata(
     dtm: date,
     publication_url: str,
     asset_url: str,
@@ -188,14 +226,16 @@ def compute_meta(
     src_content_type: str,
     src_sha256: str
 ) -> dict:
-    # date coverage (observed)
-    date_col = pd.to_datetime(df_norm.get("date"), errors="coerce")
-    observed_min = date_col.min()
-    observed_max = date_col.max()
+    # dates
+    observed = pd.to_datetime(df_norm.get("date"), errors="coerce")
+    earliest = observed.min()
+    latest = observed.max()
+    period_start = dtm.replace(day=1)
+    period_end = (dtm.replace(day=1) + relativedelta(months=1) - relativedelta(days=1))
 
     # aggregates
     amt = pd.to_numeric(df_norm.get("amount_gbp"), errors="coerce")
-    totals = float(amt.sum(skipna=True)) if getattr(amt, "size", 0) else 0.0
+    total_amount = float(amt.sum(skipna=True)) if getattr(amt, "size", 0) else 0.0
     stats = {
         "min":     float(amt.min(skipna=True)) if getattr(amt, "size", 0) else None,
         "max":     float(amt.max(skipna=True)) if getattr(amt, "size", 0) else None,
@@ -204,91 +244,106 @@ def compute_meta(
         "p95":     float(amt.quantile(0.95)) if getattr(amt, "size", 0) else None,
     }
 
-    def group_top(series_name: str, value_col: str, label_key: str, top_n: int = 10):
-        g = df_norm.groupby(series_name, dropna=True)[value_col].agg(["sum","count"]).reset_index()
-        g = g.sort_values("sum", ascending=False).head(top_n)
-        return [
-            {label_key: (row[series_name] if pd.notna(row[series_name]) else None),
-             "total": float(row["sum"]), "count": int(row["count"])}
-            for _, row in g.iterrows()
-        ]
-
-    top_suppliers   = group_top("supplier", "amount_gbp", "supplier")
-    by_entity       = group_top("entity", "amount_gbp", "entity")
-    by_expense_type = group_top("expense_type", "amount_gbp", "expense_type")
-
-    null_counts = { c: int(df_norm[c].isna().sum()) for c in df_norm.columns }
-
-    # period (DCAT temporal coverage style)
-    period_start = dtm.replace(day=1)
-    period_end = (dtm.replace(day=1) + relativedelta(months=1) - relativedelta(days=1))
+    # quality
+    score, coverage, null_counts = completeness_score_and_coverage(df_norm)
 
     return {
-        # Standards-aligned provenance & discoverability
-        "title": f"HM Treasury spend over £25,000 — {dtm:%B %Y}",
+        "title": f"HM Treasury Expenditure Over £25,000 - {dtm:%B %Y}",
         "publisher": "HM Treasury",
+        "department_code": DEPARTMENT_CODE,
         "publication_url": publication_url,
         "source_url": asset_url,
         "license": "Open Government Licence v3.0",
         "license_url": "https://www.nationalarchives.gov.uk/doc/open-government-licence/version/3/",
         "schema_version": "1.1.0",
-        "created_by": "hmt-spend-json@1.2.0",
-        "generated_at": datetime.utcnow().isoformat() + "Z",
+        "data_classification": "public",
+        "spending_threshold": SPENDING_THRESHOLD,
+        "currency": CURRENCY,
+        "amount_precision": AMOUNT_PRECISION,
 
-        # Temporal coverage (dcterms:temporal idea)
-        "period": {
-            "month": dtm.strftime("%Y-%m"),
-            "start": period_start.strftime("%Y-%m-%d"),
-            "end": period_end.strftime("%Y-%m-%d")
+        "temporal_coverage": {
+            "period": dtm.strftime("%Y-%m"),
+            "fiscal_year": uk_fiscal_year_label(dtm),
+            "start_date": period_start.strftime("%Y-%m-%d"),
+            "end_date": period_end.strftime("%Y-%m-%d"),
+            "earliest_payment_date": None if pd.isna(earliest) else earliest.strftime("%Y-%m-%d"),
+            "latest_payment_date": None if pd.isna(latest) else latest.strftime("%Y-%m-%d"),
         },
-        "observed_date_min": None if pd.isna(observed_min) else observed_min.strftime("%Y-%m-%d"),
-        "observed_date_max": None if pd.isna(observed_max) else observed_max.strftime("%Y-%m-%d"),
 
-        # Structure & traceability
-        "rows": _safe_len(df_norm),
-        "rows_original": _safe_len(df_raw),
-        "columns_normalized": list(df_norm.columns),
-        "column_mappings": column_map,
-        "sheet": {
+        "processing_info": {
+            "generator": "hmt-spend-json@1.2.0",
+            "processed_timestamp": datetime.utcnow().isoformat() + "Z",
+            "update_frequency": "monthly",
+            "next_publication_date": estimated_next_publication(dtm),
+        },
+
+        "source_worksheet": {
             "workbook": book_name,
             "worksheet": sheet_name or "<csv>",
             "selector": "auto",
-            "reason": "most signal columns"
+            "reason": "most signal columns",
         },
+
         "source_file": {
             "bytes": src_bytes,
             "content_type": src_content_type,
-            "sha256": src_sha256
+            "sha256": src_sha256,
         },
 
-        # Data quality (wire up to your schema validator if desired)
-        "validation": {
-            "schema_checks": {"passed": True, "errors": 0},
-            "null_counts": null_counts,
-            "parse_warnings": 0
+        "record_counts": {
+            "transaction_count": _safe_len(df_norm),
+            "source_record_count": _safe_len(df_raw),
+            "unique_suppliers": int(df_norm["supplier"].nunique(dropna=True)) if "supplier" in df_norm else 0,
+            "unique_entities": int(df_norm["entity"].nunique(dropna=True))   if "entity"   in df_norm else 0,
+            "unique_expense_types": int(df_norm["expense_type"].nunique(dropna=True)) if "expense_type" in df_norm else 0,
         },
 
-        # Viz-friendly aggregates
-        "currency": "GBP",
-        "amount_precision": 2,
-        "totals": { "amount_gbp": totals },
-        "counts": {
-            "records": _safe_len(df_norm),
-            "suppliers": int(df_norm["supplier"].nunique(dropna=True)),
-            "entities": int(df_norm["entity"].nunique(dropna=True)),
-            "expense_types": int(df_norm["expense_type"].nunique(dropna=True)),
+        "financial_summary": {
+            "total_amount_gbp": total_amount,
+            "payment_statistics": stats,
         },
-        "amount_stats": stats,
-        "top_suppliers": top_suppliers,
-        "by_entity": by_entity,
-        "by_expense_type": by_expense_type,
 
-        "keywords": ["HM Treasury", "transparency", "spend over £25,000"],
-        "themes": ["Public spending", "Finance"]
+        "data_quality": {
+            "completeness_score": round(score, 2),
+            "coverage": coverage,
+            "validation": {
+                "schema_checks_passed": True,
+                "parse_errors": 0,
+                "parse_warnings": 0,
+            },
+            "missing_data_counts": null_counts,
+        },
+
+        "data_completeness": {
+            "supplier_postcode": {"status":"not_provided","reason":"Supplier privacy protection"},
+            "supplier_type":     {"status":"not_collected","reason":"Field not part of standard reporting"},
+            "contract_number":   {"status":"optional","reason":"Only required for framework contracts"},
+            "project_code":      {"status":"internal_use","reason":"Internal tracking codes not disclosed"},
+        },
+
+        "known_limitations": [
+            "Supplier details limited for privacy reasons",
+            "Contract numbers only provided for framework agreements",
+            "Some transactions may be aggregated for commercial sensitivity",
+            "Excludes classified or security-related expenditure"
+        ],
+
+        "top_suppliers": groups_top(df_norm, "supplier", top_n=10, label_key="supplier"),
+        "spending_by_entity": groups_top(df_norm, "entity", top_n=50, label_key="entity"),
+        "spending_by_expense_type": groups_top(df_norm, "expense_type", top_n=50, label_key="expense_type"),
+
+        "contact_info": {
+            "email": "public.enquiries@hmtreasury.gov.uk",
+            "department": "HM Treasury Transparency Team"
+        },
+
+        "keywords": ["transparency","public spending","government expenditure","HM Treasury"],
+        "themes": ["Public Finance","Government Transparency","Fiscal Accountability"]
     }
 
+# ----------------------- Core: fetch → normalize → write -----------------------
 def save_month_json(dtm: date, publication_url: str, asset_url: str):
-    # Fetch asset
+    # Download asset
     resp = requests.get(asset_url, headers=HEADERS, timeout=120)
     resp.raise_for_status()
     content = resp.content
@@ -303,7 +358,7 @@ def save_month_json(dtm: date, publication_url: str, asset_url: str):
     with open(tmp, "wb") as f:
         f.write(content)
 
-    # Read the spreadsheet
+    # Read
     if asset_url.lower().endswith(".csv"):
         df_raw = pd.read_csv(tmp)
         sheet_name = None
@@ -317,8 +372,8 @@ def save_month_json(dtm: date, publication_url: str, asset_url: str):
     # Normalize
     df_norm, column_map = normalize_dataframe(df_raw)
 
-    # Metadata
-    meta = compute_meta(
+    # Build metadata
+    metadata = compute_metadata(
         dtm=dtm,
         publication_url=publication_url,
         asset_url=asset_url,
@@ -334,40 +389,33 @@ def save_month_json(dtm: date, publication_url: str, asset_url: str):
 
     # Write combined object
     with open(out_path, "w", encoding="utf-8") as f:
-        json.dump({"meta": meta, "data": df_norm.to_dict(orient="records")}, f, ensure_ascii=False, indent=2)
+        json.dump({"metadata": metadata, "data": df_norm.to_dict(orient="records")}, f, ensure_ascii=False, indent=2)
 
-    print(f"Wrote {out_path} ({meta['rows']} rows)")
+    print(f"Wrote {out_path} ({metadata['record_counts']['transaction_count']} rows)")
 
 # ----------------------- CLI -----------------------
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--month", help="Target month in YYYY-MM (default: previous month)")
-    ap.add_argument("--backfill", type=int, default=0, help="Also fetch N months before --month (optional)")
+    ap.add_argument("--month", help="YYYY-MM (default: previous month)")
     args = ap.parse_args()
 
+    # single month only (fast default)
     today = date.today()
     base = (today.replace(day=1) - relativedelta(months=1)) if not args.month else datetime.strptime(args.month, "%Y-%m").date().replace(day=1)
 
-    # Single month by default (fast). Backfill if requested.
-    months = [base]
-    for i in range(1, args.backfill + 1):
-        months.append(base - relativedelta(months=i))
-    months.sort()
-
-    for dtm in months:
-        pub_url = month_to_url(dtm)
-        try:
-            pr = requests.get(pub_url, headers=HEADERS, timeout=60)
-            if pr.status_code != 200:
-                print(f"Skip {dtm:%Y-%m}: {pr.status_code} {pub_url}")
-                continue
-            asset = find_asset_xlsx_or_csv(pr.text)
-            if not asset:
-                print(f"No spreadsheet link found on {pub_url}")
-                continue
-            save_month_json(dtm, publication_url=pub_url, asset_url=asset)
-        except Exception as e:
-            print(f"Error processing {dtm:%Y-%m}: {e}")
+    pub_url = month_to_url(base)
+    try:
+        pr = requests.get(pub_url, headers=HEADERS, timeout=60)
+        if pr.status_code != 200:
+            print(f"Skip {base:%Y-%m}: {pr.status_code} {pub_url}")
+            return
+        asset = find_asset_xlsx_or_csv(pr.text)
+        if not asset:
+            print(f"No spreadsheet link found on {pub_url}")
+            return
+        save_month_json(base, publication_url=pub_url, asset_url=asset)
+    except Exception as e:
+        print(f"Error processing {base:%Y-%m}: {e}")
 
 if __name__ == "__main__":
     main()
