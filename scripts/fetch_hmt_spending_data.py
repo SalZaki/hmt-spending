@@ -336,10 +336,6 @@ def save_month_json(dtm: date, publication_url: str, asset_url: str):
     with open(out_path, "w", encoding="utf-8") as f:
         json.dump({"meta": meta, "data": df_norm.to_dict(orient="records")}, f, ensure_ascii=False, indent=2)
 
-    # Optional: keep sidecar if you want (comment out if not needed)
-    with open(out_path.replace(".json", ".meta.json"), "w", encoding="utf-8") as f:
-        json.dump(meta, f, ensure_ascii=False, indent=2)
-
     print(f"Wrote {out_path} ({meta['rows']} rows)")
 
 # ----------------------- CLI -----------------------
