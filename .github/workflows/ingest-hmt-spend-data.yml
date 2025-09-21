@@ -3,12 +3,10 @@ name: fetch-hmt-spend-data
 on:
   workflow_dispatch:
     inputs:
-      start:
-        description: "Start month (YYYY-MM)"
+      month:
+        description: "Spend month (YYYY-MM)"
         required: false
-      end:
-          description: "End month inclusive (YYYY-MM)"
-          required: false
+        default: "2025-01"
   schedule:
     # 08:10 UTC on the 3rd of each month (≈09:10 London during GMT)
     - cron: "10 8 3 * *"
@@ -38,9 +36,9 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          python scripts/fetch_hmt_spending_data.py --start "${{ github.event.inputs.start }}" --end "${{ github.event.inputs.end }}"
+          python scripts/fetch_hmt_spending_data.py --month "${{ github.event.inputs.month }}"
 
-      - name: Commit and push changes
+      - name: Commit configuration
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
