@@ -67,5 +67,3 @@ JSON
 git add -A
 export GPG_TTY="$(tty)" || true
 git commit -m "chore: initialize monorepo (pnpm workspace + turbo)" || true
-
-echo "✅ Monorepo initialized (pnpm workspace + turbo)."

@@ -1,8 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-if [[ ! -f tsconfig.base.json ]]; then
-  cat > tsconfig.base.json <<'JSON'
+mkdir -p apps packages
+[[ -f pnpm-workspace.yaml ]] || cat > pnpm-workspace.yaml <<'YAML'
+packages:
+  - "apps/*"
+  - "packages/*"
+YAML
+
+[[ -f tsconfig.base.json ]] || cat > tsconfig.base.json <<'JSON'
 {
   "compilerOptions": {
     "target": "ES2022",
@@ -21,42 +27,22 @@ if [[ ! -f tsconfig.base.json ]]; then
   }
 }
 JSON
-fi
 
-# --- 2) shared config package: @hmt/config ---
 mkdir -p packages/config
-
 cat > packages/config/package.json <<'JSON'
-{
-  "name": "@hmt-spending/config",
-  "version": "0.1.0",
-  "private": true,
-  "type": "module",
-  "main": "vite.react.ts"
-}
+{ "name": "@hmt-spending/config", "version": "0.1.0", "private": true, "type": "module", "main": "vite.react.ts" }
 JSON
-
 cat > packages/config/tsconfig.react.json <<'JSON'
-{
-  "extends": "../../tsconfig.base.json",
-  "compilerOptions": { "types": ["vite/client"] }
-}
+{ "extends": "../../tsconfig.base.json", "compilerOptions": { "types": ["vite/client"] } }
 JSON
-
 cat > packages/config/vite.react.ts <<'TS'
 import { defineConfig } from "vite"
 import react from "@vitejs/plugin-react"
 import tailwindcss from "@tailwindcss/vite"
-
-export default defineConfig({
-  plugins: [react(), tailwindcss()],
-  server: { port: 5173 }
-})
+export default defineConfig({ plugins: [react(), tailwindcss()], server: { port: 5173 } })
 TS
 
-# --- 3) UI package: @hmt/ui (GOV.UK CSS + Tailwind + shadcn-ready) ---
 mkdir -p packages/ui/src/{styles,components,lib,hooks}
-
 cat > packages/ui/package.json <<'JSON'
 {
   "name": "@hmt-spending/ui",
@@ -64,56 +50,28 @@ cat > packages/ui/package.json <<'JSON'
   "private": true,
   "type": "module",
   "main": "src/index.ts",
-  "peerDependencies": {
-    "react": ">=18",
-    "react-dom": ">=18"
-  },
-  "dependencies": {
-    "govuk-frontend": "^5.7.0"
-  }
+  "peerDependencies": { "react": ">=18", "react-dom": ">=18" }
 }
 JSON
-
-# styles: import GOV.UK first, then Tailwind v4 (via Vite plugin)
 cat > packages/ui/src/styles/globals.css <<'CSS'
-/* 1) GOV.UK Frontend CSS (base components/patterns) */
 @import "govuk-frontend/govuk/all.css";
-
-/* 2) Tailwind v4 utilities (provided by @tailwindcss/vite) */
 @import "tailwindcss";
-
-/* 3) UI design tokens (optional) */
-:root {
-  --brand-accent: #1d70b8; /* GOV.UK blue */
-}
+:root { --brand-accent: #1d70b8; }
 CSS
-
-# basic exports + a utility that shadcn components commonly use
 cat > packages/ui/src/lib/utils.ts <<'TS'
-export function cn(...classes: Array<string | false | null | undefined>) {
-  return classes.filter(Boolean).join(" ")
-}
+export function cn(...c:(string|false|null|undefined)[]){return c.filter(Boolean).join(" ")}
 TS
-
 cat > packages/ui/src/index.ts <<'TS'
 import "./styles/globals.css"
 export * from "./lib/utils"
-// Re-export UI components here as you add them (e.g. from shadcn CLI)
 TS
-
-# --- 4) shadcn/ui monorepo setup (components.json in ui + example for apps) ---
 cat > packages/ui/components.json <<'JSON'
 {
   "$schema": "https://ui.shadcn.com/schema.json",
   "style": "new-york",
   "rsc": false,
   "tsx": true,
-  "tailwind": {
-    "config": "",
-    "css": "src/styles/globals.css",
-    "baseColor": "zinc",
-    "cssVariables": true
-  },
+  "tailwind": { "config": "", "css": "src/styles/globals.css", "baseColor": "zinc", "cssVariables": true },
   "iconLibrary": "lucide",
   "aliases": {
     "components": "@hmt-spending/ui/components",
@@ -125,7 +83,9 @@ cat > packages/ui/components.json <<'JSON'
 }
 JSON
 
-# If you already have apps/web, you can drop a lightweight components.json there too
+pnpm add -w -D vite @vitejs/plugin-react tailwindcss @tailwindcss/vite
+pnpm -F @hmt-spending/ui add govuk-frontend
+
 if [[ -d apps/web ]]; then
   cat > apps/web/components.json <<'JSON'
 {
@@ -133,24 +93,12 @@ if [[ -d apps/web ]]; then
   "style": "new-york",
   "rsc": false,
   "tsx": true,
-  "tailwind": {
-    "config": "",
-    "css": "../../packages/ui/src/styles/globals.css",
-    "baseColor": "zinc",
-    "cssVariables": true
-  },
+  "tailwind": { "config": "", "css": "../../packages/ui/src/styles/globals.css", "baseColor": "zinc", "cssVariables": true },
   "iconLibrary": "lucide",
-  "aliases": {
-    "@": "./src",
-    "components": "@/components",
-    "hooks": "@/hooks",
-    "lib": "@/lib",
-    "utils": "@hmt-spending/ui/lib/utils",
-    "ui": "@hmt/ui/components"
-  }
+  "aliases": { "@": "./src", "components": "@/components", "hooks": "@/hooks", "lib": "@/lib", "utils": "@hmt-spending/ui/lib/utils", "ui": "@hmt-spending/ui/components" }
 }
 JSON
 fi
 
-# --- 5) install root dev tooling: vite/react plugin + tailwind v4 vite plugin ---
-pnpm add -D vite @vitejs/plugin-react @tailwindcss/vite tailwindcss
+git add pnpm-workspace.yaml tsconfig.base.json packages/config packages/ui
+git commit -m "chore(config,ui): add shared Vite/TS config and UI pkg (GOV.UK CSS + Tailwind v4 + shadcn-ready)"
