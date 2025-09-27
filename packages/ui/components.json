@@ -1,0 +1,15 @@
+{
+  "$schema": "https://ui.shadcn.com/schema.json",
+  "style": "new-york",
+  "rsc": false,
+  "tsx": true,
+  "tailwind": { "config": "", "css": "src/styles/globals.css", "baseColor": "zinc", "cssVariables": true },
+  "iconLibrary": "lucide",
+  "aliases": {
+    "components": "@hmt-spending/ui/components",
+    "hooks": "@hmt-spending/ui/hooks",
+    "lib": "@hmt-spending/ui/lib",
+    "utils": "@hmt-spending/ui/lib/utils",
+    "ui": "@hmt-spending/ui/components"
+  }
+}
