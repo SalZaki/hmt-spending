@@ -42,7 +42,7 @@ import tailwindcss from "@tailwindcss/vite"
 export default defineConfig({ plugins: [react(), tailwindcss()], server: { port: 5173 } })
 TS
 
-mkdir -p packages/ui/src/{styles,components,lib,hooks}
+mkdir -p packages/ui/src/{styles,components,libs,hooks}
 cat > packages/ui/package.json <<'JSON'
 {
   "name": "@hmt-spending/ui",

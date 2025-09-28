@@ -1,3 +1,2 @@
-@import "govuk-frontend/govuk/all.css";
 @import "tailwindcss";
 :root { --brand-accent: #1d70b8; }

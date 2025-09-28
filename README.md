@@ -23,13 +23,13 @@ This project creates an automated pipeline to collect, standardize, and make HM 
 
 ## Project Phases
 
-### Phase 1: Data Ingestion Pipeline (Current)
+### Phase 1: Data Ingestion Pipeline
 
-- [ ] Automated monthly collection of HM Treasury spending data
-- [ ] Convert Excel files to standardized JSON format
-- [ ] Store historical data with consistent naming
-- [ ] GitHub Actions for scheduled data collection
-- [ ] Basic data validation and error handling
+- [X] Automated monthly collection of HM Treasury spending data
+- [X] Convert Excel files to standardized JSON format
+- [X] Store historical data with consistent naming
+- [X] GitHub Actions for scheduled data collection
+- [X] Basic data validation and error handling
 
 ### Phase 2: Data Quality & Enrichment
 

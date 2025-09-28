@@ -6,7 +6,7 @@
     "dev": "turbo dev",
     "build": "turbo build",
     "lint": "turbo lint",
-    "preview": "pnpm --filter hmt-spending/web preview"
+    "preview": "pnpm --filter @hmt-spending/web preview"
   },
   "devDependencies": {
     "@tailwindcss/vite": "^4.1.13",
