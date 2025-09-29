@@ -36,7 +36,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          python scripts/fetch_hmt_spending_data.py --month "${{ github.event.inputs.month }}"
+          python apps/pipeline/fetch_hmt_spending_data.py --month "${{ github.event.inputs.month }}"
 
       - name: Commit configuration
         run: |
