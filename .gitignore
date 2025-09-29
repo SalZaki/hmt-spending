@@ -127,3 +127,17 @@ __pycache__/
 # Local data scratch
 *.tmp
 *.log
+
+.DS_Store
+node_modules
+.turbo
+*.log
+dist
+dist-ssr
+*.local
+.env
+.cache
+server/dist
+public/dist
+.vite
+coverage
